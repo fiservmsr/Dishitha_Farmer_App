@@ -1,0 +1,41 @@
+import os
+from flask import Flask, request, jsonify, render_template
+from google import genai
+
+app = Flask(__name__)
+client = genai.Client()
+
+@app.route("/")
+def home():
+    return render_template("index.html")
+
+@app.route("/ask", methods=["POST"])
+def ask():
+    data = request.get_json()
+    question = data.get("question", "")
+    language = data.get("language", "ta-IN")
+
+    lang_instruction = (
+        "Reply in simple, easy-to-understand spoken Tamil (தமிழ்) using Tamil script."
+        if language == "ta-IN"
+        else "Reply in simple, easy-to-understand English."
+    )
+
+    prompt = (
+        f"You are an expert, friendly agricultural advisor helping Indian farmers. "
+        f"{lang_instruction} Keep the answer practical, short (3-4 sentences), "
+        f"and avoid special markdown symbols like asterisks or bullet points so it sounds natural when read aloud.\n\n"
+        f"Farmer's Question: {question}"
+    )
+
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+        )
+        return jsonify({"answer": response.text})
+    except Exception as e:
+        return jsonify({"answer": "Sorry, I could not process that right now."}), 500
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
