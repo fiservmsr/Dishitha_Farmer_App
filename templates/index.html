@@ -1,41 +1,167 @@
-import os
-from flask import Flask, request, jsonify, render_template
-from google import genai
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Farmer Friend</title>
+<style>
+body {
+  font-family: Arial, sans-serif;
+  background: #eaf7e9;
+  text-align: center;
+  padding: 15px;
+  margin: 0;
+}
+.container {
+  max-width: 500px;
+  margin: 20px auto;
+  background: white;
+  padding: 20px;
+  border-radius: 18px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+}
+button, select, input {
+  padding: 14px;
+  margin: 8px 0;
+  border-radius: 10px;
+  font-size: 16px;
+  width: 100%;
+  box-sizing: border-box;
+}
+select, input {
+  border: 1px solid #ccc;
+}
+button {
+  background: #168447;
+  color: white;
+  border: 0;
+  cursor: pointer;
+  font-weight: bold;
+}
+#answer {
+  background: #f0f7ef;
+  padding: 16px;
+  border-radius: 12px;
+  min-height: 65px;
+  text-align: left;
+  line-height: 1.5;
+}
+</style>
+</head>
+<body>
 
-app = Flask(__name__)
-client = genai.Client()
+<div class="container">
+  <h1>🌾 AI Farmer Friend</h1>
+  <p>விவசாயிகளுக்கான AI உதவியாளர்</p>
 
-@app.route("/")
-def home():
-    return render_template("index.html")
+  <select id="language">
+    <option value="ta-IN">தமிழ் (Tamil)</option>
+    <option value="en-IN">English</option>
+  </select>
 
-@app.route("/ask", methods=["POST"])
-def ask():
-    data = request.get_json()
-    question = data.get("question", "")
-    language = data.get("language", "ta-IN")
+  <button onclick="startListening()">🎤 Ask by Voice</button>
 
-    lang_instruction = (
-        "Reply in simple, easy-to-understand spoken Tamil (தமிழ்) using Tamil script."
-        if language == "ta-IN"
-        else "Reply in simple, easy-to-understand English."
-    )
+  <input type="text" id="textInput" placeholder="Or type your question here..." />
+  <button onclick="askFromText()" style="background:#2b7a78;">📩 Send Question</button>
 
-    prompt = (
-        f"You are an expert, friendly agricultural advisor helping Indian farmers. "
-        f"{lang_instruction} Keep the answer practical, short (3-4 sentences), "
-        f"and avoid special markdown symbols like asterisks or bullet points so it sounds natural when read aloud.\n\n"
-        f"Farmer's Question: {question}"
-    )
+  <p id="status">Tap the microphone and speak.</p>
 
-    try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-        )
-        return jsonify({"answer": response.text})
-    except Exception as e:
-        return jsonify({"answer": "Sorry, I could not process that right now."}), 500
+  <h3>Your Question</h3>
+  <p id="question">Your question appears here.</p>
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+  <h3>AI Answer</h3>
+  <div id="answer">AI answer will appear here.</div>
+
+  <button onclick="speakAnswer()">🔊 Hear Answer</button>
+</div>
+
+<script>
+// 👇 PASTE YOUR GEMINI API KEY INSIDE THE QUOTES BELOW 👇
+const API_KEY = "PASTE_YOUR_GEMINI_API_KEY_HERE";
+
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+let answerText = "";
+
+function startListening() {
+  if (!SpeechRecognition) {
+    alert("Voice not supported in this browser. Please use Google Chrome or type below.");
+    return;
+  }
+
+  const recognition = new SpeechRecognition();
+  recognition.lang = document.getElementById("language").value;
+  recognition.continuous = false;
+  recognition.interimResults = false;
+
+  document.getElementById("status").textContent = "Listening... Speak now.";
+
+  recognition.onresult = function(event) {
+    const spokenText = event.results[0][0].transcript;
+    sendQuestion(spokenText);
+  };
+
+  recognition.onerror = function() {
+    document.getElementById("status").textContent = "Mic error. Allow permission or type below.";
+  };
+
+  recognition.start();
+}
+
+function askFromText() {
+  const typedText = document.getElementById("textInput").value.trim();
+  if (!typedText) return;
+  sendQuestion(typedText);
+}
+
+async function sendQuestion(questionText) {
+  document.getElementById("question").textContent = questionText;
+  document.getElementById("status").textContent = "Thinking...";
+
+  const language = document.getElementById("language").value;
+  const langInstruction = language === "ta-IN"
+    ? "Reply in simple, easy-to-understand spoken Tamil (தமிழ்) using Tamil script."
+    : "Reply in simple, easy-to-understand English.";
+
+  const prompt = `You are a helpful agricultural advisor for Indian farmers. ${langInstruction} Keep the answer short (3-4 sentences) and avoid bullet points or asterisks so it reads smoothly aloud.\n\nQuestion: ${questionText}`;
+
+  try {
+    const response = await fetch(
+      `https://googleapis.com{API_KEY}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }]
+        })
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error?.message || "API Error");
+    }
+
+    answerText = data.candidates[0].content.parts[0].text;
+    document.getElementById("answer").textContent = answerText;
+    document.getElementById("status").textContent = "Answer received!";
+    speakAnswer();
+
+  } catch (error) {
+    document.getElementById("status").textContent = "Error: " + error.message;
+  }
+}
+
+function speakAnswer() {
+  if (!answerText) return;
+  speechSynthesis.cancel();
+
+  const speech = new SpeechSynthesisUtterance(answerText);
+  speech.lang = document.getElementById("language").value;
+  speech.rate = 0.9;
+  speechSynthesis.speak(speech);
+}
+</script>
+
+</body>
+</html>
