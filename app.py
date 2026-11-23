@@ -96,6 +96,27 @@ Farmer's question:
     except Exception as e:
         app.logger.exception("AI request failed")
 
+        error_code = getattr(e, "code", None)
+
+        if error_code == 503:
+            return jsonify({
+                "error": "Google AI is currently busy. Please wait 30 seconds and try again."
+            }), 503
+
+        elif error_code == 429:
+            return jsonify({
+                "error": "AI request limit reached. Please try again later."
+            }), 429
+
+        elif error_code == 404:
+            return jsonify({
+                "error": "Gemini model unavailable. Please check model configuration."
+            }), 503
+
+        return jsonify({
+            "error": "AI service temporarily unavailable. Please try again."
+        }), 500
+
         return jsonify({
             "error": "AI service is temporarily unavailable. Please try again."
         }), 500
