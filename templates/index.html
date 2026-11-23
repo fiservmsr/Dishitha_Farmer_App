@@ -74,7 +74,7 @@ button {
 
   <button onclick="speakAnswer()">🔊 Hear Answer</button>
 </div>
-
+<script>
 const SpeechRecognition =
   window.SpeechRecognition || window.webkitSpeechRecognition;
 
@@ -174,7 +174,7 @@ function speakAnswer() {
 
   window.speechSynthesis.speak(speech);
 }
-
+</script>
 
 </body>
 </html>
