@@ -75,93 +75,106 @@ button {
   <button onclick="speakAnswer()">🔊 Hear Answer</button>
 </div>
 
-<script>
-// 👇 PASTE YOUR GEMINI API KEY INSIDE THE QUOTES BELOW 👇
-const API_KEY = "AQ.Ab8RN6KByNSRXGFwOEp6Mzqg9A-mQeYGz351mH2MR-sGllItRw";
+const SpeechRecognition =
+  window.SpeechRecognition || window.webkitSpeechRecognition;
 
-const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 let answerText = "";
+let recognition;
 
 function startListening() {
   if (!SpeechRecognition) {
-    alert("Voice not supported in this browser. Please use Google Chrome or type below.");
+    alert("Please use Google Chrome for voice input.");
     return;
   }
 
-  const recognition = new SpeechRecognition();
+  recognition = new SpeechRecognition();
   recognition.lang = document.getElementById("language").value;
   recognition.continuous = false;
   recognition.interimResults = false;
 
-  document.getElementById("status").textContent = "Listening... Speak now.";
+  document.getElementById("status").textContent =
+    "Listening... Speak now.";
 
   recognition.onresult = function(event) {
     const spokenText = event.results[0][0].transcript;
+    document.getElementById("textInput").value = spokenText;
     sendQuestion(spokenText);
   };
 
-  recognition.onerror = function() {
-    document.getElementById("status").textContent = "Mic error. Allow permission or type below.";
+  recognition.onerror = function(event) {
+    document.getElementById("status").textContent =
+      "Microphone error: " + event.error;
   };
 
   recognition.start();
 }
 
 function askFromText() {
-  const typedText = document.getElementById("textInput").value.trim();
-  if (!typedText) return;
-  sendQuestion(typedText);
+  const question = document.getElementById("textInput").value.trim();
+
+  if (!question) {
+    alert("Please type your question.");
+    return;
+  }
+
+  sendQuestion(question);
 }
 
 async function sendQuestion(questionText) {
+  const status = document.getElementById("status");
+  const answer = document.getElementById("answer");
+
   document.getElementById("question").textContent = questionText;
-  document.getElementById("status").textContent = "Thinking...";
-
-  const language = document.getElementById("language").value;
-  const langInstruction = language === "ta-IN"
-    ? "Reply in simple, easy-to-understand spoken Tamil (தமிழ்) using Tamil script."
-    : "Reply in simple, easy-to-understand English.";
-
-  const prompt = `You are a helpful agricultural advisor for Indian farmers. ${langInstruction} Keep the answer short (3-4 sentences) and avoid bullet points or asterisks so it reads smoothly aloud.\n\nQuestion: ${questionText}`;
+  status.textContent = "Connecting to AI...";
+  answer.textContent = "Please wait...";
 
   try {
-    const response = await fetch(
-      `https://googleapis.com{API_KEY}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }]
-        })
-      }
-    );
+    const response = await fetch("/ask", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        question: questionText,
+        language: document.getElementById("language").value
+      })
+    });
 
     const data = await response.json();
 
     if (!response.ok) {
-      throw new Error(data.error?.message || "API Error");
+      throw new Error(data.error || data.answer || "Server error");
     }
 
-    answerText = data.candidates[0].content.parts[0].text;
-    document.getElementById("answer").textContent = answerText;
-    document.getElementById("status").textContent = "Answer received!";
+    answerText = data.answer;
+
+    if (!answerText) {
+      throw new Error("AI returned an empty answer.");
+    }
+
+    answer.textContent = answerText;
+    status.textContent = "Answer received successfully!";
+
     speakAnswer();
 
   } catch (error) {
-    document.getElementById("status").textContent = "Error: " + error.message;
+    answer.textContent = "Sorry, unable to get an answer.";
+    status.textContent = "Error: " + error.message;
   }
 }
 
 function speakAnswer() {
   if (!answerText) return;
-  speechSynthesis.cancel();
+
+  window.speechSynthesis.cancel();
 
   const speech = new SpeechSynthesisUtterance(answerText);
   speech.lang = document.getElementById("language").value;
   speech.rate = 0.9;
-  speechSynthesis.speak(speech);
+
+  window.speechSynthesis.speak(speech);
 }
-</script>
+
 
 </body>
 </html>
