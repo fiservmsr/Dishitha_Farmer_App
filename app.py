@@ -134,8 +134,7 @@ def test_route():
 def ask():
     data = request.get_json(silent=True) or {}
     question = (data.get("question") or "").strip()
-    language = data.get("language", "ta-IN")
-
+    language = "ta-IN"
     if not question:
         return jsonify({"error": "Please enter a farming question."}), 400
 
@@ -157,7 +156,6 @@ def ask():
             "error": str(e),
         })
 
-
 @app.route("/speak", methods=["POST"])
 def speak():
     try:
@@ -167,7 +165,7 @@ def speak():
         data = request.get_json(silent=True) or {}
 
         text = (data.get("text") or "").strip()
-        language = data.get("language", "ta-IN")
+        language = "ta-IN"
 
         if not text:
             return jsonify({"error": "No text provided"}), 400
@@ -175,18 +173,15 @@ def speak():
         if len(text) > 2500:
             return jsonify({"error": "Text exceeds 2500 characters"}), 400
 
-        if language not in ["ta-IN", "en-IN"]:
-            return jsonify({"error": "Unsupported language"}), 400
-
-payload = {
-    "text": text,
-    "language_code": "ta-IN",
-    "model": "bulbul:v4-flash",
-    "speaker": "ishita_ta_conversational",
-    "output_audio_codec": "mp3",
-    "speech_sample_rate": 24000,
-    "enable_preprocessing": True
-}
+        payload = {
+            "text": text,
+            "language_code": language,
+            "model": "bulbul:v4-flash",
+            "speaker": "ishita_ta_conversational",
+            "output_audio_codec": "mp3",
+            "speech_sample_rate": 24000,
+            "enable_preprocessing": True
+        }
 
         req = urllib.request.Request(
             "https://api.sarvam.ai/text-to-speech",
@@ -215,6 +210,7 @@ payload = {
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 
 if __name__ == "__main__":
