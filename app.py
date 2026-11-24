@@ -1,85 +1,101 @@
 import os
-import urllib.request
 import json
+import urllib.request
+import urllib.error
 from flask import Flask, render_template, request, jsonify
-from google import genai
-from google.genai import types
 
 app = Flask(__name__)
 
-GEMINI_KEY = (os.environ.get("GEMINI_API_KEY") or "").strip()
-GROQ_KEY = (os.environ.get("GROQ_API_KEY") or "").strip()
+GROQ_API_KEY = (os.environ.get("GROQ_API_KEY") or "").strip()
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-gemini_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
-PRIMARY_MODEL = "gemini-3.8-flash"
-GROQ_MODEL = "qwen/qwen3.8-27b"
+GROQ_MODELS = [
+    "qwen/qwen3.8-27b",
+    "openai/gpt-oss-20b",
+    "llama-3.1-8b-instant",
+]
 
 
 def build_prompt(question: str, language: str) -> str:
-    lang_label = "Tamil" if language.startswith("ta") else "English"
+    lang_map = {
+        "ta-IN": "Tamil",
+        "en-IN": "English",
+        "hi-IN": "Hindi",
+        "te-IN": "Telugu",
+        "ml-IN": "Malayalam",
+        "kn-IN": "Kannada",
+    }
+    lang_label = lang_map.get(language, "Tamil" if str(language).startswith("ta") else "English")
     return (
-        f"You are AI Farmer Friend helping an Indian farmer with general fertilizer and crop care.\n"
+        f"You are AI Farmer Friend helping Indian farmers with practical crop and general fertilizer advice.\n"
         f"Reply ONLY in {lang_label} using 4 short bullet points.\n"
-        f"Do not guess exact chemical pesticide/fertilizer dosages; recommend soil testing and local agriculture officer guidance.\n\n"
-        f"Farmer input: {question}"
+        f"Never invent fertilizer or pesticide dosages; advise soil testing and consulting local agricultural officers.\n\n"
+        f"Farmer question: {question}"
     )
 
 
-def ask_gemini(prompt: str) -> str:
-    if not gemini_client:
-        raise RuntimeError("GEMINI_API_KEY not set")
-    resp = gemini_client.models.generate_content(
-        model=PRIMARY_MODEL,
-        contents=prompt,
-        config=types.GenerateContentConfig(max_output_tokens=350, temperature=0.3),
-    )
-    return (resp.text or "").strip()
+def call_groq_model(prompt: str, model_id: str, max_tokens: int = 400) -> str:
+    if not GROQ_API_KEY:
+        raise RuntimeError("GROQ_API_KEY is missing in Vercel Environment Variables.")
 
-
-def ask_groq(prompt: str) -> str:
-    if not GROQ_KEY:
-        raise RuntimeError("GROQ_API_KEY not set")
     payload = {
-        "model": GROQ_MODEL,
+        "model": model_id,
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 350,
+        "max_tokens": max_tokens,
         "temperature": 0.3,
     }
+
     req = urllib.request.Request(
-        "https://api.groq.com/openai/v1/chat/completions",
+        GROQ_URL,
         data=json.dumps(payload).encode("utf-8"),
         headers={
-            "Authorization": f"Bearer {GROQ_KEY}",
+            "Authorization": f"Bearer {GROQ_API_KEY}",
             "Content-Type": "application/json",
+            "User-Agent": "AI-Farmer-Friend/1.0",
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=15) as res:
-        data = json.loads(res.read().decode("utf-8"))
-    return (data["choices"][0]["message"]["content"] or "").strip()
+
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as err:
+        detail = err.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(f"Groq HTTP {err.code} ({model_id}): {detail}") from err
+
+    choices = body.get("choices") or []
+    text = ((choices[0].get("message") or {}).get("content") or "").strip() if choices else ""
+    if not text:
+        raise RuntimeError(f"Empty response from Groq model {model_id}")
+    return text
 
 
-def demo_fertilizer_reply(question: str, language: str) -> str:
-    q_lower = question.lower()
-    crop = "your crop"
-    for name in ["paddy", "rice", "banana", "tomato", "brinjal", "cotton", "sugarcane", "maize", "groundnut"]:
-        if name in q_lower:
-            crop = name.title()
-            break
+def ask_groq(prompt: str, max_tokens: int = 400):
+    last_error = None
+    for model_id in GROQ_MODELS:
+        try:
+            answer = call_groq_model(prompt, model_id, max_tokens=max_tokens)
+            return answer, model_id
+        except Exception as err:
+            last_error = err
+            app.logger.warning(f"Groq model {model_id} failed: {err}")
+            continue
+    raise last_error or RuntimeError("All Groq models failed.")
 
-    if language.startswith("ta"):
+
+def demo_answer(question: str, language: str) -> str:
+    if str(language).startswith("ta"):
         return (
-            f"• {crop} பயிருக்கான பொதுவான உர மற்றும் பராமரிப்பு வழிகாட்டுதல் (மாதிரி பதில்).\n"
-            "• அடித்தள உரமாக நன்கு மக்கிய தொழுஉரம் (FYM) மற்றும் மண் பரிசோதனை அடிப்படையில் NPK உரங்களைப் பயன்படுத்தவும்.\n"
-            "• இலை மஞ்சள் அல்லது பூச்சித் தாக்குதல் இருந்தால் சொந்தமாக அளவு கணிக்காமல் உள்ளூர் வேளாண் விரிவாக்க மையத்தை அணுகவும்.\n"
+            "• தற்காலிகமாக AI சேவையில் நெரிசல் உள்ளதால் பொதுவான மாதிரி பதில் காட்டப்படுகிறது.\n"
+            "• மண் பரிசோதனை அடிப்படையில் அடித்தள உரம் மற்றும் NPK உரங்களைத் திட்டமிடுங்கள்.\n"
+            "• உரம் அல்லது பூச்சிக்கொல்லி அளவுகளை அனுமானிக்காமல் உள்ளூர் வேளாண் அலுவலரிடம் ஆலோசிக்கவும்.\n"
             "• மண்ணின் ஈரப்பதத்திற்கு ஏற்ப சீரான இடைவெளியில் நீர்ப்பாசனம் செய்யவும்."
         )
-
     return (
-        f"• General fertilizer & crop guidance for {crop} (demo fallback):\n"
-        "• Apply well-decomposed farmyard manure (FYM) and balance NPK based on a soil test report.\n"
-        "• Avoid guessing exact chemical fertilizer or pesticide doses; check with your local agricultural officer for field-specific rates.\n"
-        "• Maintain steady moisture appropriate to the crop growth stage and avoid waterlogging."
+        "• Showing general baseline guidance while Groq is temporarily busy or rate-limited.\n"
+        "• Base basal manure and NPK applications on a soil test report and crop stage.\n"
+        "• Never guess chemical fertilizer or pesticide dosages; consult your local agricultural officer.\n"
+        "• Irrigate steadily according to soil moisture and avoid waterlogging."
     )
 
 
@@ -90,17 +106,27 @@ def home():
 
 @app.route("/test")
 def test_route():
-    fp = {
-        "gemini_key_present": bool(GEMINI_KEY),
-        "prefix": GEMINI_KEY[:6] if GEMINI_KEY else None,
-        "suffix": GEMINI_KEY[-4:] if GEMINI_KEY else None,
-        "groq_key_present": bool(GROQ_KEY),
+    key_info = {
+        "groq_key_present": bool(GROQ_API_KEY),
+        "prefix": GROQ_API_KEY[:6] if GROQ_API_KEY else None,
+        "suffix": GROQ_API_KEY[-4:] if GROQ_API_KEY else None,
     }
     try:
-        out = ask_gemini("Reply with one word: OK")
-        return jsonify({"ok": True, "provider": "gemini", "model": PRIMARY_MODEL, "reply": out, "key_check": fp})
+        reply, model_used = ask_groq("Reply with the single word: Working", max_tokens=20)
+        return jsonify({
+            "ok": True,
+            "provider": "groq",
+            "model_used": model_used,
+            "reply": reply,
+            "key_info": key_info,
+        })
     except Exception as e:
-        return jsonify({"ok": False, "provider": "gemini", "error": str(e), "key_check": fp}), 503
+        return jsonify({
+            "ok": False,
+            "provider": "groq",
+            "error": str(e),
+            "key_info": key_info,
+        }), 200
 
 
 @app.route("/ask", methods=["POST"])
@@ -110,19 +136,25 @@ def ask():
     language = data.get("language", "ta-IN")
 
     if not question:
-        return jsonify({"error": "Please enter a crop or fertilizer question."}), 400
+        return jsonify({"error": "Please enter a farming question."}), 400
 
     prompt = build_prompt(question, language)
 
-    for fn in (ask_gemini, ask_groq):
-        try:
-            text = fn(prompt)
-            if text:
-                return jsonify({"answer": text})
-        except Exception:
-            continue
-
-    return jsonify({"answer": demo_fertilizer_reply(question, language), "demo_mode": True})
+    try:
+        answer, model_used = ask_groq(prompt, max_tokens=400)
+        return jsonify({
+            "answer": answer,
+            "provider": "groq",
+            "model_used": model_used,
+        })
+    except Exception as e:
+        app.logger.warning(f"Groq fallback triggered ({e}); returning safe baseline answer.")
+        return jsonify({
+            "answer": demo_answer(question, language),
+            "provider": "demo",
+            "fallback": True,
+            "error": str(e),
+        })
 
 
 if __name__ == "__main__":
