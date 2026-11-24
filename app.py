@@ -178,14 +178,14 @@ def speak():
         if language not in ["ta-IN", "en-IN"]:
             return jsonify({"error": "Unsupported language"}), 400
 
-        payload = {
-            "text": text,
-            "language_code": language,
-            "model": "bulbul:v4-flash",
-            "speaker": "simran_en_customer",
-            "output_audio_codec": "mp3",
-            "speech_sample_rate": 24000
-        }
+payload = {
+    "text": text,
+    "language_code": language,
+    "model": "bulbul:v4-flash",
+    "speaker": "anushka",
+    "output_audio_codec": "mp3",
+    "speech_sample_rate": 24000
+}
 
         req = urllib.request.Request(
             "https://api.sarvam.ai/text-to-speech",
