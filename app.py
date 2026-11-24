@@ -1,13 +1,10 @@
-
 import os
 from flask import Flask, render_template, request, jsonify
 from google import genai
 
 app = Flask(__name__)
 
-# Gemini API configuration
 api_key = os.environ.get("GEMINI_API_KEY")
-
 client = genai.Client(api_key=api_key) if api_key else None
 
 
@@ -25,8 +22,7 @@ def ask():
             }), 500
 
         data = request.get_json(silent=True) or {}
-
-        question = data.get("question", "").strip()
+        question = (data.get("question") or "").strip()
         language = data.get("language", "ta-IN")
 
         if not question:
@@ -34,14 +30,13 @@ def ask():
                 "error": "Please enter your farming question."
             }), 400
 
-        # Language selection
         language_name = {
             "ta-IN": "Tamil",
             "en-IN": "English",
             "hi-IN": "Hindi",
             "te-IN": "Telugu",
             "ml-IN": "Malayalam",
-            "kn-IN": "Kannada"
+            "kn-IN": "Kannada",
         }.get(language, "Tamil")
 
         prompt = f"""
@@ -76,46 +71,35 @@ Farmer's question:
 {question}
 """
 
-        # Updated Gemini model
         response = client.models.generate_content(
             model="gemini-3.8-flash",
-            contents=prompt
+            contents=prompt,
         )
 
-        answer = response.text
-
+        answer = (response.text or "").strip()
         if not answer:
             return jsonify({
                 "error": "No answer received. Please try again."
             }), 500
 
-        return jsonify({
-            "answer": answer
-        })
+        return jsonify({"answer": answer})
 
     except Exception as e:
         app.logger.exception("AI request failed")
-
         error_code = getattr(e, "code", None)
 
         if error_code == 503:
             return jsonify({
                 "error": "Google AI is currently busy. Please wait 30 seconds and try again."
             }), 503
-
-        elif error_code == 429:
+        if error_code == 429:
             return jsonify({
                 "error": "AI request limit reached. Please try again later."
             }), 429
-
-        elif error_code == 404:
+        if error_code == 404:
             return jsonify({
-                "error": "Gemini model unavailable. Please check model configuration."
-            }), 503
-
-        return jsonify({
-            "error": "AI service temporarily unavailable. Please try again."
-        }), 500
+                "error": "Requested Gemini model was not found. Check model ID or SDK version."
+            }), 404
 
         return jsonify({
             "error": "AI service is temporarily unavailable. Please try again."
@@ -123,4 +107,4 @@ Farmer's question:
 
 
 if __name__ == "__main__":
-    app.run(debug=False)
+    app.run(debug=False, host="0.0.0.0", port=5000)
