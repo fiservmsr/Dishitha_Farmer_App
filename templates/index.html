@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ta">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -59,7 +59,7 @@ button {
   <h1>🌾 AI Farmer Friend Raghu</h1>
   <p>விவசாயிகளுக்கான AI உதவியாளர்</p>
 
-  <select id="language">
+  <select id="language" onchange="onLanguageChange()">
     <option value="ta-IN">தமிழ் (Tamil)</option>
     <option value="en-IN">English</option>
   </select>
@@ -95,14 +95,62 @@ const SpeechRecognition =
 let answerText = "";
 let recognition;
 
+// Warm up voices list early on browsers that load voices asynchronously
+if ("speechSynthesis" in window) {
+  window.speechSynthesis.getVoices();
+  window.speechSynthesis.addEventListener("voiceschanged", () => {
+    window.speechSynthesis.getVoices();
+  });
+}
+
+function getSelectedLanguage() {
+  const select = document.getElementById("language");
+  return (select && select.value) || "ta-IN";
+}
+
+function onLanguageChange() {
+  const langCode = getSelectedLanguage();
+  document.documentElement.lang = langCode.split("-")[0] || "ta";
+  stopSpeaking();
+}
+
+function pickVoiceForLang(langCode) {
+  if (!("speechSynthesis" in window)) return null;
+  const voices = window.speechSynthesis.getVoices() || [];
+  if (!voices.length) return null;
+
+  const target = (langCode || "ta-IN").toLowerCase();
+  const baseLang = target.split("-")[0];
+
+  // 1. Exact locale match (e.g., ta-IN, en-IN)
+  let match = voices.find(v => (v.lang || "").toLowerCase() === target);
+  if (match) return match;
+
+  // 2. Same language code match (e.g., ta, en)
+  match = voices.find(v => {
+    const vLang = (v.lang || "").toLowerCase();
+    return vLang === baseLang || vLang.startsWith(baseLang + "-");
+  });
+  if (match) return match;
+
+  // 3. Fallback to any English voice when English is selected
+  if (baseLang === "en") {
+    match = voices.find(v => (v.lang || "").toLowerCase().startsWith("en"));
+    if (match) return match;
+  }
+
+  return null;
+}
+
 function startListening() {
   if (!SpeechRecognition) {
     alert("Please use Google Chrome for voice input.");
     return;
   }
 
+  const langCode = getSelectedLanguage();
   recognition = new SpeechRecognition();
-  recognition.lang = document.getElementById("language").value;
+  recognition.lang = langCode;
   recognition.continuous = false;
   recognition.interimResults = false;
 
@@ -137,6 +185,7 @@ function askFromText() {
 async function sendQuestion(questionText) {
   const status = document.getElementById("status");
   const answer = document.getElementById("answer");
+  const langCode = getSelectedLanguage();
 
   document.getElementById("question").textContent = questionText;
   status.textContent = "Connecting to AI...";
@@ -150,7 +199,7 @@ async function sendQuestion(questionText) {
       },
       body: JSON.stringify({
         question: questionText,
-        language: document.getElementById("language").value
+        language: langCode
       })
     });
 
@@ -169,26 +218,48 @@ async function sendQuestion(questionText) {
     answer.textContent = answerText;
     status.textContent = "Answer received successfully!";
 
-    speakAnswer();
+    speakAnswer(langCode);
 
   } catch (error) {
-    answer.textContent = "Sorry, unable to get an answer.ggggg";
+    answer.textContent = "Sorry, unable to get an answer.";
     status.textContent = "Error: " + error.message;
   }
 }
 
-function speakAnswer() {
+function speakAnswer(explicitLang) {
   if (!answerText || !("speechSynthesis" in window)) return;
 
   window.speechSynthesis.cancel();
 
-  // Remove markdown symbols (*, #, etc.) so the voice reads smoothly
-  const cleanText = answerText.replace(/[*#_`~-]/g, " ");
-  const speech = new SpeechSynthesisUtterance(cleanText);
-  speech.lang = document.getElementById("language").value;
-  speech.rate = 0.9;
+  const langCode = explicitLang || getSelectedLanguage();
+  // Clean markdown/bullet symbols so TTS reads sentences naturally
+  const cleanText = answerText
+    .replace(/^[•*-]\s*/gm, "")
+    .replace(/[*#_`~-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 
-  window.speechSynthesis.speak(speech);
+  if (!cleanText) return;
+
+  const speech = new SpeechSynthesisUtterance(cleanText);
+  speech.lang = langCode;
+  speech.rate = 0.92;
+
+  const launchSpeech = () => {
+    const matchedVoice = pickVoiceForLang(langCode);
+    if (matchedVoice) {
+      speech.voice = matchedVoice;
+      speech.lang = matchedVoice.lang;
+    }
+    window.speechSynthesis.speak(speech);
+  };
+
+  if ((window.speechSynthesis.getVoices() || []).length === 0) {
+    window.speechSynthesis.addEventListener("voiceschanged", launchSpeech, { once: true });
+    setTimeout(launchSpeech, 300);
+  } else {
+    launchSpeech();
+  }
 }
 
 function stopSpeaking() {
@@ -196,6 +267,8 @@ function stopSpeaking() {
     window.speechSynthesis.cancel();
   }
 }
+
+onLanguageChange();
 </script>
 
 </body>
