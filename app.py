@@ -182,7 +182,7 @@ payload = {
     "text": text,
     "language_code": language,
     "model": "bulbul:v4-flash",
-    "speaker": "anushka",
+    "speaker": "gokul_ta_narration",
     "output_audio_codec": "mp3",
     "speech_sample_rate": 24000
 }
