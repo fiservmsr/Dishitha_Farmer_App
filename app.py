@@ -1,67 +1,86 @@
 import os
-import time
+import urllib.request
+import json
 from flask import Flask, render_template, request, jsonify
 from google import genai
 from google.genai import types
 
 app = Flask(__name__)
 
-raw_key = os.environ.get("GEMINI_API_KEY")
-clean_key = (raw_key or "").strip()
-client = genai.Client(api_key=clean_key) if clean_key else None
+GEMINI_KEY = (os.environ.get("GEMINI_API_KEY") or "").strip()
+GROQ_KEY = (os.environ.get("GROQ_API_KEY") or "").strip()
 
-ACTIVE_MODEL = "gemini-3.8-flash"
-
-FALLBACK_ANSWERS = {
-    "ta-IN": (
-        "• தற்காலிகமாக AI சேவையில் அதிக நெரிசல் உள்ளது (503/429).\n"
-        "• மண்ணின் ஈரப்பதம் மற்றும் பயிர் நிலையைப் பொறுத்து நீர்ப்பாசனத்தைத் திட்டமிடுங்கள்.\n"
-        "• உரம் அல்லது பூச்சிக்கொல்லி அளவுகளை அனுமானிக்காமல் உள்ளூர் வேளாண் அலுவலரிடம் ஆலோசிக்கவும்.\n"
-        "• ஒரு நிமிடம் கழித்து மீண்டும் கேள்வியை முயற்சிக்கவும்."
-    ),
-    "en-IN": (
-        "• Gemini's free-tier capacity is temporarily busy or rate-limited right now.\n"
-        "• Check soil moisture and crop stage before scheduling irrigation or fieldwork.\n"
-        "• Do not guess fertilizer or pesticide dosages; consult your local agricultural officer for serious crop issues.\n"
-        "• Wait a minute and try your question again."
-    ),
-}
+gemini_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
+PRIMARY_MODEL = "gemini-3.8-flash"
+GROQ_MODEL = "qwen/qwen3.8-27b"
 
 
-def call_gemini(prompt, max_tokens=450):
-    """Calls gemini-3.8-flash with brief retries only on temporary 503 spikes."""
-    last_err = None
-    for attempt in range(3):
-        try:
-            response = client.models.generate_content(
-                model=ACTIVE_MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    max_output_tokens=max_tokens,
-                    temperature=0.4,
-                ),
-            )
-            text = (response.text or "").strip()
-            if text:
-                return text
-        except Exception as err:
-            last_err = err
-            if getattr(err, "code", None) == 503 and attempt < 2:
-                time.sleep(2 * (attempt + 1))
-                continue
-            raise err
-    raise last_err or RuntimeError("Empty response from Gemini.")
+def build_prompt(question: str, language: str) -> str:
+    lang_label = "Tamil" if language.startswith("ta") else "English"
+    return (
+        f"You are AI Farmer Friend helping an Indian farmer with general fertilizer and crop care.\n"
+        f"Reply ONLY in {lang_label} using 4 short bullet points.\n"
+        f"Do not guess exact chemical pesticide/fertilizer dosages; recommend soil testing and local agriculture officer guidance.\n\n"
+        f"Farmer input: {question}"
+    )
 
 
-def get_key_fingerprint():
-    if not clean_key:
-        return None
-    return {
-        "length": len(clean_key),
-        "prefix": clean_key[:6],
-        "suffix": clean_key[-4:],
-        "has_whitespace_issue": clean_key != raw_key,
+def ask_gemini(prompt: str) -> str:
+    if not gemini_client:
+        raise RuntimeError("GEMINI_API_KEY not set")
+    resp = gemini_client.models.generate_content(
+        model=PRIMARY_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(max_output_tokens=350, temperature=0.3),
+    )
+    return (resp.text or "").strip()
+
+
+def ask_groq(prompt: str) -> str:
+    if not GROQ_KEY:
+        raise RuntimeError("GROQ_API_KEY not set")
+    payload = {
+        "model": GROQ_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 350,
+        "temperature": 0.3,
     }
+    req = urllib.request.Request(
+        "https://api.groq.com/openai/v1/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {GROQ_KEY}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=15) as res:
+        data = json.loads(res.read().decode("utf-8"))
+    return (data["choices"][0]["message"]["content"] or "").strip()
+
+
+def demo_fertilizer_reply(question: str, language: str) -> str:
+    q_lower = question.lower()
+    crop = "your crop"
+    for name in ["paddy", "rice", "banana", "tomato", "brinjal", "cotton", "sugarcane", "maize", "groundnut"]:
+        if name in q_lower:
+            crop = name.title()
+            break
+
+    if language.startswith("ta"):
+        return (
+            f"• {crop} பயிருக்கான பொதுவான உர மற்றும் பராமரிப்பு வழிகாட்டுதல் (மாதிரி பதில்).\n"
+            "• அடித்தள உரமாக நன்கு மக்கிய தொழுஉரம் (FYM) மற்றும் மண் பரிசோதனை அடிப்படையில் NPK உரங்களைப் பயன்படுத்தவும்.\n"
+            "• இலை மஞ்சள் அல்லது பூச்சித் தாக்குதல் இருந்தால் சொந்தமாக அளவு கணிக்காமல் உள்ளூர் வேளாண் விரிவாக்க மையத்தை அணுகவும்.\n"
+            "• மண்ணின் ஈரப்பதத்திற்கு ஏற்ப சீரான இடைவெளியில் நீர்ப்பாசனம் செய்யவும்."
+        )
+
+    return (
+        f"• General fertilizer & crop guidance for {crop} (demo fallback):\n"
+        "• Apply well-decomposed farmyard manure (FYM) and balance NPK based on a soil test report.\n"
+        "• Avoid guessing exact chemical fertilizer or pesticide doses; check with your local agricultural officer for field-specific rates.\n"
+        "• Maintain steady moisture appropriate to the crop growth stage and avoid waterlogging."
+    )
 
 
 @app.route("/")
@@ -70,74 +89,40 @@ def home():
 
 
 @app.route("/test")
-def test_api():
-    fingerprint = get_key_fingerprint()
-    if not client:
-        return jsonify({
-            "ok": False,
-            "key_fingerprint": fingerprint,
-            "error": "GEMINI_API_KEY is missing or empty in Vercel Environment Variables."
-        }), 500
+def test_route():
+    fp = {
+        "gemini_key_present": bool(GEMINI_KEY),
+        "prefix": GEMINI_KEY[:6] if GEMINI_KEY else None,
+        "suffix": GEMINI_KEY[-4:] if GEMINI_KEY else None,
+        "groq_key_present": bool(GROQ_KEY),
+    }
     try:
-        reply = call_gemini("Reply with the single word: Working", max_tokens=20)
-        return jsonify({
-            "ok": True,
-            "key_fingerprint": fingerprint,
-            "model": ACTIVE_MODEL,
-            "reply": reply,
-        })
+        out = ask_gemini("Reply with one word: OK")
+        return jsonify({"ok": True, "provider": "gemini", "model": PRIMARY_MODEL, "reply": out, "key_check": fp})
     except Exception as e:
-        return jsonify({
-            "ok": False,
-            "key_fingerprint": fingerprint,
-            "error": str(e),
-        }), 500
+        return jsonify({"ok": False, "provider": "gemini", "error": str(e), "key_check": fp}), 503
 
 
 @app.route("/ask", methods=["POST"])
 def ask():
-    language = "ta-IN"
-    try:
-        data = request.get_json(silent=True) or {}
-        question = (data.get("question") or "").strip()
-        language = data.get("language", "ta-IN")
+    data = request.get_json(silent=True) or {}
+    question = (data.get("question") or "").strip()
+    language = data.get("language", "ta-IN")
 
-        if not question:
-            return jsonify({"error": "Please enter your farming question."}), 400
+    if not question:
+        return jsonify({"error": "Please enter a crop or fertilizer question."}), 400
 
-        if not client:
-            return jsonify({"error": "GEMINI_API_KEY is missing in Vercel settings."}), 500
+    prompt = build_prompt(question, language)
 
-        language_name = {
-            "ta-IN": "Tamil",
-            "en-IN": "English",
-            "hi-IN": "Hindi",
-            "te-IN": "Telugu",
-            "ml-IN": "Malayalam",
-            "kn-IN": "Kannada",
-        }.get(language, "Tamil")
+    for fn in (ask_gemini, ask_groq):
+        try:
+            text = fn(prompt)
+            if text:
+                return jsonify({"answer": text})
+        except Exception:
+            continue
 
-        prompt = f"""You are AI Farmer Friend helping Indian farmers.
-Answer ONLY in {language_name}.
-Give a short, practical answer in 4 to 5 brief bullet points.
-Never invent fertilizer or pesticide dosages; advise consulting local agricultural officers for serious diseases.
-
-Farmer's question: {question}"""
-
-        answer = call_gemini(prompt, max_tokens=450)
-        return jsonify({"answer": answer})
-
-    except Exception as e:
-        app.logger.exception("AI request failed")
-        error_code = getattr(e, "code", None)
-        if error_code in (429, 503) or "429" in str(e) or "503" in str(e):
-            fallback = FALLBACK_ANSWERS.get(language, FALLBACK_ANSWERS["en-IN"])
-            return jsonify({
-                "answer": fallback,
-                "fallback": True,
-                "notice": "Gemini free tier is busy/rate-limited; showing a safe backup tip."
-            })
-        return jsonify({"error": str(e)}), 500
+    return jsonify({"answer": demo_fertilizer_reply(question, language), "demo_mode": True})
 
 
 if __name__ == "__main__":
