@@ -1,5 +1,4 @@
 import os
-import time
 from flask import Flask, render_template, request, jsonify
 from google import genai
 from google.genai import types
@@ -9,48 +8,8 @@ app = Flask(__name__)
 api_key = os.environ.get("GEMINI_API_KEY")
 client = genai.Client(api_key=api_key) if api_key else None
 
-# Current active models (in order of preference)
-ACTIVE_MODELS = [
-    "gemini-3.8-flash",
-    "gemini-3.8-flash-lite",
-    "gemini-3.0-flash",
-    "gemini-2.0-flash",
-]
-
-
-def ask_gemini(prompt, max_tokens=450):
-    """Tries active Gemini models with quick retries on temporary 503 demand spikes."""
-    attempts_log = []
-
-    for model_name in ACTIVE_MODELS:
-        # Try each model up to 2 times if it returns a temporary 503 busy error
-        for attempt in range(2):
-            try:
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        max_output_tokens=max_tokens,
-                        temperature=0.4,
-                    ),
-                )
-                text = (response.text or "").strip()
-                if text:
-                    return text, model_name, attempts_log
-            except Exception as err:
-                code = getattr(err, "code", None)
-                attempts_log.append(f"{model_name} (try {attempt + 1}): {code or err}")
-
-                # If busy (503), wait 1.5s and retry once before moving to next model
-                if code == 503 and attempt == 0:
-                    time.sleep(1.5)
-                    continue
-                # If 404 (not available) or 429 (quota 0), move immediately to next model
-                if code in (404, 429, 503):
-                    break
-                raise err
-
-    raise RuntimeError("All models failed: " + " | ".join(attempts_log))
+# Use only the active Free-tier model (1 request per question to save quota)
+ACTIVE_MODELS = ["gemini-3.8-flash"]
 
 
 @app.route("/")
@@ -66,15 +25,15 @@ def test_api():
             "error": "GEMINI_API_KEY is missing in Vercel Environment Variables."
         }), 500
     try:
-        reply, used_model, log = ask_gemini(
-            "Reply with the single word: Working",
-            max_tokens=20
+        response = client.models.generate_content(
+            model=ACTIVE_MODELS[0],
+            contents="Reply with the single word: Working",
+            config=types.GenerateContentConfig(max_output_tokens=20),
         )
         return jsonify({
             "ok": True,
-            "working_model": used_model,
-            "reply": reply,
-            "attempts": log
+            "working_model": ACTIVE_MODELS[0],
+            "reply": (response.text or "").strip(),
         })
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
@@ -109,11 +68,28 @@ Never invent fertilizer or pesticide dosages; advise consulting local agricultur
 
 Farmer's question: {question}"""
 
-        answer, _, _ = ask_gemini(prompt, max_tokens=450)
+        response = client.models.generate_content(
+            model=ACTIVE_MODELS[0],
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                max_output_tokens=450,
+                temperature=0.4,
+            ),
+        )
+
+        answer = (response.text or "").strip()
+        if not answer:
+            return jsonify({"error": "No answer received. Please try again."}), 500
+
         return jsonify({"answer": answer})
 
     except Exception as e:
         app.logger.exception("AI request failed")
+        error_code = getattr(e, "code", None)
+        if error_code == 429:
+            return jsonify({
+                "error": "Daily/minute free quota reached on Gemini API. Please wait 1 minute or use a fresh API key."
+            }), 429
         return jsonify({"error": str(e)}), 500
 
 
