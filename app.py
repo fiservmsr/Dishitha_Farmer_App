@@ -8,6 +8,7 @@ app = Flask(__name__)
 
 GROQ_API_KEY = (os.environ.get("GROQ_API_KEY") or "").strip()
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+SARVAM_API_KEY = (os.environ.get("SARVAM_API_KEY") or "").strip()
 
 GROQ_MODELS = [
     "qwen/qwen3.8-27b",
