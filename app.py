@@ -157,5 +157,63 @@ def ask():
         })
 
 
+@app.route("/speak", methods=["POST"])
+def speak():
+    try:
+        if not SARVAM_API_KEY:
+            return jsonify({"error": "Sarvam API key missing"}), 500
+
+        data = request.get_json(silent=True) or {}
+
+        text = (data.get("text") or "").strip()
+        language = data.get("language", "ta-IN")
+
+        if not text:
+            return jsonify({"error": "No text provided"}), 400
+
+        if len(text) > 2500:
+            return jsonify({"error": "Text exceeds 2500 characters"}), 400
+
+        if language not in ["ta-IN", "en-IN"]:
+            return jsonify({"error": "Unsupported language"}), 400
+
+        payload = {
+            "text": text,
+            "language_code": language,
+            "model": "bulbul:v4-flash",
+            "speaker": "simran_en_customer",
+            "output_audio_codec": "mp3",
+            "speech_sample_rate": 24000
+        }
+
+        req = urllib.request.Request(
+            "https://api.sarvam.ai/text-to-speech",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "api-subscription-key": SARVAM_API_KEY
+            },
+            method="POST"
+        )
+
+        with urllib.request.urlopen(req, timeout=30) as response:
+            result = json.loads(response.read().decode("utf-8"))
+
+        if not result.get("audios"):
+            return jsonify({"error": "No audio returned"}), 502
+
+        return jsonify({
+            "audio": result["audios"][0],
+            "mime_type": "audio/mpeg"
+        })
+
+    except urllib.error.HTTPError as e:
+        details = e.read().decode("utf-8", errors="replace")
+        return jsonify({"error": details}), e.code
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 if __name__ == "__main__":
     app.run(debug=False)
