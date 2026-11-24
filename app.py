@@ -8,6 +8,13 @@ app = Flask(__name__)
 api_key = os.environ.get("GEMINI_API_KEY")
 client = genai.Client(api_key=api_key) if api_key else None
 
+# Primary model first, backup models if the primary is busy (503/429)
+MODELS_TO_TRY = [
+    "gemini-3.8-flash",
+    "gemini-3.8-flash-lite",
+    "gemini-3.0-flash",
+]
+
 
 @app.route("/")
 def home():
@@ -43,20 +50,32 @@ Never invent fertilizer or pesticide dosages; advise consulting local agricultur
 
 Farmer's question: {question}"""
 
-        response = client.models.generate_content(
-            model="gemini-3.8-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                max_output_tokens=450,
-                temperature=0.4,
-            ),
-        )
+        last_error = None
 
-        answer = (response.text or "").strip()
-        if not answer:
-            return jsonify({"error": "No answer received. Please try again."}), 500
+        for model_name in MODELS_TO_TRY:
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        max_output_tokens=450,
+                        temperature=0.4,
+                    ),
+                )
+                answer = (response.text or "").strip()
+                if answer:
+                    return jsonify({"answer": answer})
+            except Exception as model_err:
+                last_error = model_err
+                error_code = getattr(model_err, "code", None)
+                # Retry with next model if busy (503), rate-limited (429), or unavailable (404)
+                if error_code in (503, 429, 404):
+                    continue
+                raise model_err
 
-        return jsonify({"answer": answer})
+        return jsonify({
+            "error": "AI service is currently busy across all models. Please wait 15 seconds and try again."
+        }), 503
 
     except Exception as e:
         app.logger.exception("AI request failed")
