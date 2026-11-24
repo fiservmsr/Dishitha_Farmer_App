@@ -180,11 +180,12 @@ def speak():
 
 payload = {
     "text": text,
-    "language_code": language,
+    "language_code": "ta-IN",
     "model": "bulbul:v4-flash",
-    "speaker": "gokul_ta_narration",
+    "speaker": "ishita_ta_conversational",
     "output_audio_codec": "mp3",
-    "speech_sample_rate": 24000
+    "speech_sample_rate": 24000,
+    "enable_preprocessing": True
 }
 
         req = urllib.request.Request(
