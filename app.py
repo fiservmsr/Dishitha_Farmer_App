@@ -6,10 +6,26 @@ from google.genai import types
 
 app = Flask(__name__)
 
-api_key = os.environ.get("GEMINI_API_KEY")
-client = genai.Client(api_key=api_key) if api_key else None
+raw_key = os.environ.get("GEMINI_API_KEY")
+clean_key = (raw_key or "").strip()
+client = genai.Client(api_key=clean_key) if clean_key else None
 
 ACTIVE_MODEL = "gemini-3.8-flash"
+
+FALLBACK_ANSWERS = {
+    "ta-IN": (
+        "• தற்காலிகமாக AI சேவையில் அதிக நெரிசல் உள்ளது (503/429).\n"
+        "• மண்ணின் ஈரப்பதம் மற்றும் பயிர் நிலையைப் பொறுத்து நீர்ப்பாசனத்தைத் திட்டமிடுங்கள்.\n"
+        "• உரம் அல்லது பூச்சிக்கொல்லி அளவுகளை அனுமானிக்காமல் உள்ளூர் வேளாண் அலுவலரிடம் ஆலோசிக்கவும்.\n"
+        "• ஒரு நிமிடம் கழித்து மீண்டும் கேள்வியை முயற்சிக்கவும்."
+    ),
+    "en-IN": (
+        "• Gemini's free-tier capacity is temporarily busy or rate-limited right now.\n"
+        "• Check soil moisture and crop stage before scheduling irrigation or fieldwork.\n"
+        "• Do not guess fertilizer or pesticide dosages; consult your local agricultural officer for serious crop issues.\n"
+        "• Wait a minute and try your question again."
+    ),
+}
 
 
 def call_gemini(prompt, max_tokens=450):
@@ -31,10 +47,21 @@ def call_gemini(prompt, max_tokens=450):
         except Exception as err:
             last_err = err
             if getattr(err, "code", None) == 503 and attempt < 2:
-                time.sleep(2 * (attempt + 1))  # Wait 2s, then 4s
+                time.sleep(2 * (attempt + 1))
                 continue
             raise err
     raise last_err or RuntimeError("Empty response from Gemini.")
+
+
+def get_key_fingerprint():
+    if not clean_key:
+        return None
+    return {
+        "length": len(clean_key),
+        "prefix": clean_key[:6],
+        "suffix": clean_key[-4:],
+        "has_whitespace_issue": clean_key != raw_key,
+    }
 
 
 @app.route("/")
@@ -44,34 +71,42 @@ def home():
 
 @app.route("/test")
 def test_api():
+    fingerprint = get_key_fingerprint()
     if not client:
         return jsonify({
             "ok": False,
-            "error": "GEMINI_API_KEY is missing in Vercel Environment Variables."
+            "key_fingerprint": fingerprint,
+            "error": "GEMINI_API_KEY is missing or empty in Vercel Environment Variables."
         }), 500
     try:
         reply = call_gemini("Reply with the single word: Working", max_tokens=20)
         return jsonify({
             "ok": True,
-            "working_model": ACTIVE_MODEL,
+            "key_fingerprint": fingerprint,
+            "model": ACTIVE_MODEL,
             "reply": reply,
         })
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+        return jsonify({
+            "ok": False,
+            "key_fingerprint": fingerprint,
+            "error": str(e),
+        }), 500
 
 
 @app.route("/ask", methods=["POST"])
 def ask():
+    language = "ta-IN"
     try:
-        if not client:
-            return jsonify({"error": "GEMINI_API_KEY is missing in Vercel settings."}), 500
-
         data = request.get_json(silent=True) or {}
         question = (data.get("question") or "").strip()
         language = data.get("language", "ta-IN")
 
         if not question:
             return jsonify({"error": "Please enter your farming question."}), 400
+
+        if not client:
+            return jsonify({"error": "GEMINI_API_KEY is missing in Vercel settings."}), 500
 
         language_name = {
             "ta-IN": "Tamil",
@@ -95,10 +130,13 @@ Farmer's question: {question}"""
     except Exception as e:
         app.logger.exception("AI request failed")
         error_code = getattr(e, "code", None)
-        if error_code == 429:
+        if error_code in (429, 503) or "429" in str(e) or "503" in str(e):
+            fallback = FALLBACK_ANSWERS.get(language, FALLBACK_ANSWERS["en-IN"])
             return jsonify({
-                "error": "Free tier quota reached for this project. Please wait or switch to another key/project."
-            }), 429
+                "answer": fallback,
+                "fallback": True,
+                "notice": "Gemini free tier is busy/rate-limited; showing a safe backup tip."
+            })
         return jsonify({"error": str(e)}), 500
 
 
